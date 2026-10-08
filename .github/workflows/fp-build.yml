@@ -1,0 +1,61 @@
+# FrigateProtect fork: build the amd64 image and push it to ghcr.io/lman80/frigate.
+# Branch strategy and usage: FrigateProtect repo, docs/FRIGATE-FORK.md.
+#   - push a tag  v<upstream-version>-fp<N>   (e.g. v0.18.0-fp1)  -> image :0.18.0-fp1
+#   - or run it by hand (Actions > "FrigateProtect fork build") with a tag input
+# Only amd64 (the Frigate box is an Intel N95). Upstream's own workflows are
+# disabled in this fork so syncing master/dev never starts their big matrix.
+name: FrigateProtect fork build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag, e.g. 0.18.0-fp1"
+        required: true
+  push:
+    tags:
+      - "v*-fp*"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fp-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then T="${GITHUB_REF_NAME#v}"; else T="${INPUT_TAG}"; fi
+          echo "$T" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-fp[0-9]+$' || { echo "bad tag: $T"; exit 1; }
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU, Buildx, registry login, version file (upstream action)
+        uses: ./.github/actions/setup
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/main/Dockerfile
+          target: frigate
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Frigate with FrigateProtect patches
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:cache-amd64
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:cache-amd64,mode=max
