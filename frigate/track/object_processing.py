@@ -65,6 +65,11 @@ class TrackedObjectProcessor(threading.Thread):
         super().__init__(name="detected_frames_processor")
         self.config = config
         self.dispatcher = dispatcher
+
+        # FrigateProtect patch: motion boxes go to the websocket only
+        from frigate.comms.ws import WebSocketClient as _FpWs
+
+        self._fp_ws = [c for c in dispatcher.comms if isinstance(c, _FpWs)]
         self.tracked_objects_queue = tracked_objects_queue
         self.stop_event: MpEvent = stop_event
         self.camera_states: dict[str, CameraState] = {}
@@ -784,6 +789,19 @@ class TrackedObjectProcessor(threading.Thread):
             )
 
             self.update_mqtt_motion(camera, frame_time, motion_boxes)
+
+            # FrigateProtect patch: motion boxes for the connector's mover paths
+            if motion_boxes and self._fp_ws:
+                _fp_msg = json.dumps(
+                    {
+                        "t": frame_time,
+                        "w": camera_config.detect.width,
+                        "h": camera_config.detect.height,
+                        "b": [[int(v) for v in b] for b in motion_boxes[:40]],
+                    }
+                )
+                for _c in self._fp_ws:
+                    _c.publish(f"{camera}/fp_motion", _fp_msg)
 
             tracked_objects = [
                 o.to_dict() for o in camera_state.tracked_objects.values()
